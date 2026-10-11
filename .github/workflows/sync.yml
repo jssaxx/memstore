@@ -1,0 +1,55 @@
+name: Sync from ubs-io/ubsio-memstore
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+
+jobs:
+  repo-sync:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout self
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Sync and Protect
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          
+          # 把当前的脚本文件临时备份到内存外部文件夹
+          mkdir -p /tmp/workflow_backup
+          cp -r .github /tmp/workflow_backup/
+
+          # 引入大项目源并拉取你指定的那个正确分支（develop_memStore）
+          git remote add upstream-big https://github.com/jssaxx/ubs-io.git
+          git fetch upstream-big develop_memStore
+
+          # 强行切到大项目的分支上（此时本地的 master 等分支历史暂时被冲掉）
+          git checkout -B master upstream-big/develop_memStore
+
+          # 安装历史过滤工具
+          pip install git-filter-repo
+
+          # 执行剥离命令，把 ubsio-memstore 提取到根目录，并清除其他不相干的历史
+          # 此时整个环境只剩下纯净的子项目历史，且 origin 会被工具清空
+          git filter-repo --subdirectory-filter ubsio-memstore --force
+
+          # 把备份的自动化脚本强行拷回当前已经过滤好的项目根目录
+          rm -rf .github
+          cp -r /tmp/workflow_backup/.github .
+
+          # 提交这个脚本变动（保证 memstore 仓里永远有这个同步工作流）
+          git add .github/workflows/sync.yml
+          git commit -m "Keep sync workflow after history filtering" || echo "No changes to workflow"
+
+          # 重新绑定带有 Token 权限的 memstore 远程源
+          git remote add origin https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/jssaxx/memstore.git
+
+          # 强推到 GitHub 的 master 分支，实现每 20 分钟“完全洗牌同步”
+          git push origin master --force
